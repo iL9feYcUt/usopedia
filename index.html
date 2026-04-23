@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Usopedia</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+body {
+  margin: 0;
+  background: #f6f6f6;
+  color: #202122;
+  font-family: sans-serif;
+  line-height: 1.6;
+}
+
+/* 全体レイアウト */
+#mw-page-base {
+  background: #ffffff;
+}
+
+#mw-panel {
+  position: fixed;
+  width: 180px;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: #f8f9fa;
+  border-right: 1px solid #a2a9b1;
+  padding: 10px;
+}
+
+#mw-head {
+  margin-left: 180px;
+  background: #ffffff;
+  border-bottom: 1px solid #a2a9b1;
+  padding: 8px 20px;
+}
+
+#content {
+  margin-left: 180px;
+  padding: 20px;
+  max-width: 960px;
+}
+
+/* 見出し */
+h1 {
+  font-size: 28px;
+  border-bottom: 1px solid #a2a9b1;
+}
+
+h2 {
+  font-size: 20px;
+  border-bottom: 1px solid #a2a9b1;
+  margin-top: 30px;
+}
+
+/* リンク */
+a {
+  color: #0645ad;
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+/* 目次 */
+#toc {
+  border: 1px solid #a2a9b1;
+  background: #f8f9fa;
+  padding: 10px;
+  width: 300px;
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+/* 注意枠 */
+.ambox {
+  border: 1px solid #a2a9b1;
+  background: #fff8dc;
+  padding: 10px;
+  margin-bottom: 15px;
+}
+
+/* 検索 */
+#searchInput {
+  width: 100%;
+  padding: 5px;
+}
+</style>
+</head>
+
+<body>
+
+<div id="mw-panel">
+  <input id="searchInput" placeholder="検索">
+  <button onclick="search()">検索</button>
+
+  <h3>ナビゲーション</h3>
+  <a href="/">メインページ</a>
+</div>
+
+<div id="mw-head">
+  Usopedia
+</div>
+
+<div id="content">
+  <h1 id="firstHeading">読み込み中...</h1>
+
+  <div class="ambox">
+    この記事は自動生成された架空の内容です。
+  </div>
+
+  <div id="toc"></div>
+
+  <div id="mw-content-text"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
+<script>
+const SUPABASE_URL = "https://jaualhcjdrfezbnjkrhx.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImphdWFsaGNqZHJmZXpibmprcmh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5NDMxMzQsImV4cCI6MjA5MjUxOTEzNH0.pOhd9S-ubPrjgo-4xLIEl_WeH9tCWsrAEHafGHfIx_Y"; // client用の公開キー
+const SUPABASE_FUNCTION_URL = "https://jaualhcjdrfezbnjkrhx.functions.supabase.co/generate"; // Supabase Edge Function の URL に置き換えてください
+const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+function getTitle() {
+  return decodeURIComponent(location.pathname.replace("/", "") || "メインページ");
+}
+
+function search() {
+  const v = document.getElementById("searchInput").value;
+  location.href = "/" + encodeURIComponent(v);
+}
+
+async function load() {
+  const title = getTitle();
+  document.getElementById("firstHeading").textContent = title;
+
+  const { data, error } = await supabase
+    .from("articles")
+    .select("*")
+    .maybeSingle()
+    .eq("title", title);
+
+  let article = data;
+
+  if (!article) {
+    const res = await fetch(SUPABASE_FUNCTION_URL + "?title=" + encodeURIComponent(title));
+    if (!res.ok) {
+      document.getElementById("mw-content-text").textContent = "生成中にエラーが発生しました。";
+      return;
+    }
+    article = await res.json();
+  }
+
+  render(article.content);
+}
+
+function render(md) {
+  const html = md
+    .replace(/^## (.*$)/gim, "<h2>$1</h2>")
+    .replace(/\n/g, "<br>");
+
+  document.getElementById("mw-content-text").innerHTML = html;
+  createTOC();
+}
+
+function createTOC() {
+  const headers = document.querySelectorAll("#mw-content-text h2");
+  let html = "<b>目次</b><ul>";
+
+  headers.forEach(h => {
+    const id = h.textContent;
+    h.id = id;
+    html += `<li><a href="#${id}">${id}</a></li>`;
+  });
+
+  html += "</ul>";
+  document.getElementById("toc").innerHTML = html;
+}
+
+load();
+</script>
+
+</body>
+</html>
