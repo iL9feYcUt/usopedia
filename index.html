@@ -21,26 +21,63 @@ body {
 
 #mw-panel {
   position: fixed;
-  width: 180px;
+  width: 200px;
   top: 0;
   left: 0;
   bottom: 0;
   background: #f8f9fa;
   border-right: 1px solid #a2a9b1;
-  padding: 10px;
+  padding: 12px;
+  box-sizing: border-box;
+  overflow-y: auto;
 }
 
 #mw-head {
-  margin-left: 180px;
+  margin-left: 200px;
   background: #ffffff;
   border-bottom: 1px solid #a2a9b1;
-  padding: 8px 20px;
+  padding: 10px 20px;
+  box-sizing: border-box;
 }
 
 #content {
-  margin-left: 180px;
+  margin-left: 200px;
   padding: 20px;
-  max-width: 960px;
+  max-width: 1000px;
+  box-sizing: border-box;
+}
+
+/* Responsive: move side panel to top on small screens */
+@media (max-width: 720px) {
+  #mw-panel {
+    position: static;
+    width: 100%;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid #a2a9b1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+
+  #mw-head {
+    margin-left: 0;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+
+  #content {
+    margin-left: 0;
+    padding: 14px;
+  }
+
+  #toc {
+    width: 100%;
+  }
+
+  #mw-panel a { display: inline-block; margin-right: 10px; }
 }
 
 /* 見出し */
@@ -107,10 +144,6 @@ a:hover {
 <div id="content">
   <h1 id="firstHeading">読み込み中...</h1>
 
-  <div class="ambox">
-    この記事は自動生成された架空の内容です。
-  </div>
-
   <div id="toc"></div>
 
   <div id="mw-content-text"></div>
@@ -121,22 +154,29 @@ a:hover {
 const SUPABASE_URL = "https://jaualhcjdrfezbnjkrhx.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImphdWFsaGNqZHJmZXpibmprcmh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5NDMxMzQsImV4cCI6MjA5MjUxOTEzNH0.pOhd9S-ubPrjgo-4xLIEl_WeH9tCWsrAEHafGHfIx_Y"; // client用の公開キー
 const SUPABASE_FUNCTION_URL = "https://jaualhcjdrfezbnjkrhx.functions.supabase.co/generate"; // Supabase Edge Function の URL に置き換えてください
-const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 function getTitle() {
-  return decodeURIComponent(location.pathname.replace("/", "") || "メインページ");
+  const params = new URLSearchParams(location.search);
+  let title = params.get('title') || null;
+  if (!title) {
+    const p = location.pathname.replace(/^\/+|\/+$/g, '');
+    if (p) title = p;
+  }
+  return decodeURIComponent(title || 'メインページ');
 }
 
 function search() {
   const v = document.getElementById("searchInput").value;
-  location.href = "/" + encodeURIComponent(v);
+  // Use query param so local static servers won't 404 on unknown paths
+  location.href = "?title=" + encodeURIComponent(v);
 }
 
 async function load() {
   const title = getTitle();
   document.getElementById("firstHeading").textContent = title;
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseClient
     .from("articles")
     .select("*")
     .maybeSingle()
@@ -145,24 +185,101 @@ async function load() {
   let article = data;
 
   if (!article) {
-    const res = await fetch(SUPABASE_FUNCTION_URL + "?title=" + encodeURIComponent(title));
-    if (!res.ok) {
-      document.getElementById("mw-content-text").textContent = "生成中にエラーが発生しました。";
+    try {
+      const res = await fetch(SUPABASE_FUNCTION_URL + "?title=" + encodeURIComponent(title));
+      if (!res.ok) {
+        const text = await res.text();
+        let parsed = null;
+        try { parsed = JSON.parse(text); } catch (e) { /* ignore */ }
+        console.error("Edge function error:", { status: res.status, url: res.url, body: parsed || text });
+        const msg = parsed?.error?.message || parsed?.error || text || `HTTP ${res.status}`;
+        document.getElementById("mw-content-text").textContent = "生成中にエラーが発生しました: " + msg;
+        return;
+      }
+      article = await res.json();
+    } catch (err) {
+      console.error("Fetch failed:", err);
+      document.getElementById("mw-content-text").textContent = "生成中にネットワークエラーが発生しました: " + (err && err.message ? err.message : String(err));
       return;
     }
-    article = await res.json();
   }
 
-  render(article.content);
+  const content = normalizeResponse(article.content);
+  render(content);
 }
 
 function render(md) {
-  const html = md
-    .replace(/^## (.*$)/gim, "<h2>$1</h2>")
-    .replace(/\n/g, "<br>");
+  // basic markdown -> HTML conversions
+  let text = md || "";
 
-  document.getElementById("mw-content-text").innerHTML = html;
+  // headers (##)
+  text = text.replace(/^## (.*$)/gim, "<h2>$1</h2>");
+
+  // wiki-style links [[単語]] -> internal link
+  text = text.replace(/\[\[([^\]]+)\]\]/g, (m, p1) => {
+    return `<a href="?title=${encodeURIComponent(p1)}">${p1}</a>`;
+  });
+
+  // markdown links [label](url) - external if url looks like http(s)
+  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, label, url) => {
+    try {
+      const u = url.trim();
+      if (/^https?:\/\//i.test(u)) return `<a href="${u}">${label}</a>`;
+    } catch (e) {}
+    return `<a href="?title=${encodeURIComponent(label)}">${label}</a>`;
+  });
+
+  // bold **text** -> link to page wrapping strong
+  text = text.replace(/\*\*([^*]+)\*\*/g, (m, p1) => {
+    const t = p1.trim();
+    return `<a href="?title=${encodeURIComponent(t)}"><strong>${t}</strong></a>`;
+  });
+
+  // italic *text*
+  text = text.replace(/\*([^*]+)\*/g, (m, p1) => `<em>${p1}</em>`);
+
+  // preserve paragraphs/newlines
+  text = text.replace(/\n/g, "<br>");
+
+  document.getElementById("mw-content-text").innerHTML = text;
   createTOC();
+}
+
+function normalizeResponse(raw) {
+  if (!raw) return "";
+  // if already an object
+  let obj = raw;
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    // try parse JSON string
+    if (s.startsWith('{') || s.startsWith('[')) {
+      try { obj = JSON.parse(s); } catch (e) { return raw; }
+    } else {
+      return raw;
+    }
+  }
+
+  const extractors = [
+    o => o.candidates?.[0]?.content?.parts?.[0]?.text,
+    o => o.output?.[0]?.content?.[0]?.text,
+    o => o.candidates?.[0]?.output?.[0]?.content?.[0]?.text,
+    o => o.output?.[0]?.candidates?.[0]?.content?.[0]?.text,
+    o => o.result?.outputs?.[0]?.content?.[0]?.text,
+    o => o.output_text,
+    o => o.text,
+    o => o.contents?.[0]?.parts?.[0]?.text,
+    o => (typeof o === 'string' ? o : null)
+  ];
+
+  for (const fn of extractors) {
+    try {
+      const v = fn(obj);
+      if (v && typeof v === 'string') return v.trim();
+      if (v) return (typeof v === 'string' ? v : JSON.stringify(v));
+    } catch (e) { /* ignore */ }
+  }
+
+  return typeof raw === 'string' ? raw : JSON.stringify(obj);
 }
 
 function createTOC() {
