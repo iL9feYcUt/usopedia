@@ -172,9 +172,13 @@
     function getTitle() {
       const params = new URLSearchParams(location.search);
       let title = params.get('title') || null;
+      const p = location.pathname.replace(/^\/+|\/+$/g, '');
+      // Treat repository root (when site is hosted at /usopedia/) as the main page
+      const repoName = 'usopedia';
       if (!title) {
-        const p = location.pathname.replace(/^\/+|\/+$/g, '');
-        if (p) title = p;
+        if (p && p.toLowerCase() !== repoName) {
+          title = p;
+        }
       }
       return decodeURIComponent(title || 'メインページ');
     }
@@ -187,6 +191,16 @@
 
     async function load() {
       const title = getTitle();
+      // If the URL contains a redundant ?title= that just mirrors the pathname,
+      // remove it to keep the main-page URL clean (e.g. /usopedia/ instead of /usopedia/?title=usopedia)
+      try {
+        const params = new URLSearchParams(location.search);
+        const paramTitle = params.get('title');
+        const p = location.pathname.replace(/^\/+|\/+$/g, '');
+        if (paramTitle && p && paramTitle === p) {
+          history.replaceState(null, '', location.pathname + location.hash);
+        }
+      } catch (e) { /* noop */ }
       document.getElementById("firstHeading").textContent = title;
 
       const { data, error } = await supabaseClient
@@ -246,7 +260,7 @@
       // bold **text** -> link to page wrapping strong
       text = text.replace(/\*\*([^*]+)\*\*/g, (m, p1) => {
         const t = p1.trim();
-        return `<a href="?title=${encodeURIComponent(t)}"><strong>${t}</strong></a>`;
+        return `<a href="?title=${encodeURIComponent(t)}">${t}</a>`;
       });
 
       // italic *text*
